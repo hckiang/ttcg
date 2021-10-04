@@ -1,12 +1,12 @@
 #' ttcg: Three-term conjugate gradient minimization algorithms
 #'
-#' The ttcg package implements several Neculai Andrei's three-term conjugate gradient algorithms.
+#' Some accelerated three-term conjugate gradient algorithms implemented purely in R with the same user interface as optim(). The search directions and acceleration scheme are described in Andrei, N. (2013) <doi:10.1016/j.amc.2012.11.097>, Andrei, N. (2013) <doi:10.1016/j.cam.2012.10.002>, and Andrei, N (2015) <doi:10.1007/s11075-014-9845-9>. Line search is done by a hybrid algorithm incorporating the ideas in Oliveia and Takahashi (2020) <doi:10.1145/3423597> and More and Thuente (1994) <doi:10.1145/192115.192132>.
 #' 
 #' @author Hao Chi Kiang, \email{hello@hckiang.com}
 #' @docType package
-#' @name ttcg
+#' @aliases ttcg-package
 #' @importFrom numDeriv grad
-NULL
+'_PACKAGE'
 
 
 maybe = function (L, name, default)   if (is.null(L[[name]])) default else L[[name]]
@@ -15,9 +15,22 @@ printf = function (trace, fmt, ...)   if (trace) cat(sprintf(fmt, ...))
 #' Accelerated three-term conjugate gradient optimization with restart
 #'
 #' The \code{ttcg} function minimizes a given function using several Neculai Andrei's
-#' three-term conjugate gradient algorithms. Line search is done by a bisection-like
-#' weak-Wolfe search inspired by Oliveira and Takahashi's interpolate-truncate-project
-#' algorithm and More-Thuente algorithm.
+#' three-term conjugate gradient algorithms.
+#'
+#' By default, the algorithm stops when any one of the following three convergence tests
+#' is satisfied. (1) The squared Euclidean norm of the squared Euclidean norm of the
+#' gradient is smaller than a tolerance; (2) The infinity norm of the gradient is smaller
+#' than a tolerance; (3) \eqn{|f_{k+1} - f_k| < \epsilon * (1 + |f_k|)}. These three
+#' tolerances can be set in the \code{control} argument, and turnt off by setting them
+#' to any negative values. If all three were turnt off, the algorithm may never stop.
+#' 
+#' The \code{method} argument specifies how the search direction in each step is computed.
+#' Please see the three Neculai Andrei's three papers in the citation section for more
+#' detailed description. An acceleration scheme and a restart procedure are implemented
+#' according to his three papers. Line search is done by a bisection-like
+#' weak-Wolfe search described in Oliveira and Takahashi's (2020) interpolate-truncate-project
+#' algorithm, but replacing their gradient-secant interpolation with some of More-Thuente's (1994)
+#' cubic interpolation idea.
 #' 
 #' The \code{control} argument is a list that can contain any of the following named
 #' element:
@@ -25,7 +38,7 @@ printf = function (trace, fmt, ...)   if (trace) cat(sprintf(fmt, ...))
 #'     \describe{
 #'       \item{maxit}{The maximal number of iteration. Default is 500.}
 #'       \item{gl2tol}{A positive small number. The iteration will be terminated if the
-#'                     squared Euclidean norm is smaller than this number. Default is
+#'                     squared Euclidean norm of the gradient is smaller than this number. Default is
 #'                     \code{min(1e-9, length(par)*1e-10)}. To turn off this test,
 #'                     set it to any negative values.}
 #'       \item{gmaxtol}{A positive small number. The iteration will be terminated if the infinity norm of the graident is smaller than
@@ -43,28 +56,36 @@ printf = function (trace, fmt, ...)   if (trace) cat(sprintf(fmt, ...))
 #' @param fn       A function to be minimized. It should accept a numerical vector as its sole
 #'                 argument and return a scaler.
 #' @param gr       The gradient function of \code{fn}. It should accept the same argument as \code{fn}
-#'                 and return a vector of the same length as \code{par}.
+#'                 and return a vector of the same length as \code{par}. If it is \code{NULL} then
+#'                 numerical finite difference is used to obtain the gradient.
 #' @param method   A character string, one of 'TTDES', 'TTCG', 'THREECG'. This determines how the
 #'                 line search direction is computed. 'TTDES' is the default method.
 #' @param control  A list of control parameters. See Details.
 #' @param ...      Extra arguments to be passed to \code{fn}
-#' @return       A list containing the following named elements.
-#'               \describe{
-#'                 \item{par}{The optimal parameter.}
-#'                 \item{value}{The optimal function value.}
-#'                 \item{counts}{An integer vector containing the number of function and gradient calls
-#'                               used during the optimization.}
-#'                 \item{convergence}{An integer indicating convergence status. '0' means successful convergence; '1'
-#'                                    means \code{maxit} has been reached; '2' means a line search failure in which
-#'                                    a point that satisfies the weak Wolfe condition is not found (perhaps the function
-#'                                    is unbounded below).}
-#'                 \item{message}{A character string giving additional message.}
-#'               }
+#' @return         A list containing the following named elements.
+#'                 \describe{
+#'                   \item{par}{The optimal parameter.}
+#'                   \item{value}{The optimal function value.}
+#'                   \item{counts}{An integer vector containing the number of function and gradient calls
+#'                                 used during the optimization.}
+#'                   \item{convergence}{An integer indicating convergence status. '0' means successful convergence; '1'
+#'                                      means \code{maxit} has been reached; '2' means a line search failure in which
+#'                                      a point that satisfies the weak Wolfe condition is not found. Among other possibilities,
+#'                                      this may happen when the function is unbounded below or the function is
+#'                                      non-differentiable.)}
+#'                   \item{message}{A character string giving additional message.}
+#'                 }
 #' @references   Andrei, N. (2013). On three-term conjugate gradient algorithms for unconstrained optimization. Applied Mathematics and Computation, 219(11), 6316-6327.
 #' @references   Andrei, N. (2013). A simple three-term conjugate gradient algorithm for unconstrained optimization. Journal of Computational and Applied Mathematics, 241, 19-29.
 #' @references   Andrei, N. (2015). A new three-term conjugate gradient algorithm for unconstrained optimization. Numerical Algorithms, 68(2), 305-321.
 #' @references   Oliveira, I. F., & Takahashi, R. H. (2020). An Enhancement of the Bisection Method Average Performance Preserving Minmax Optimality. ACM Transactions on Mathematical Software (TOMS), 47(1), 1-24.
 #' @references   More, J. J., & Thuente, D. J. (1994). Line search algorithms with guaranteed sufficient decrease. ACM Transactions on Mathematical Software (TOMS), 20(3), 286-307.
+#' @examples
+#' nqm = rnorm(500)*2
+#' fn  = function (x,nqm1) sum((x - nqm1)^2.)
+#' gr  = function (x,nqm1) 2.*(x - nqm1)
+#' r   = ttcg(par = rnorm(500)*4., fn = fn, gr = gr, method='TTDES', nqm=nqm)
+#' all.equal(r$value, 0.0)
 #' @export
 ttcg = function (par, fn, gr = NULL, method='TTDES', control = list(), ...) {
   mode(par) = 'double'
@@ -345,85 +366,4 @@ extrap = function (a0, a, f0, fleft, gdir0, gdirleft, c2) {
     return(3.*a)
   }
 }
-
-
-
-##TRACE=F
-##tester = function (par, fn, gr) {
-##  res = list()
-##  res[['MINE']] = ttcg(par = par, fn = fn, gr = gr, method='TTDES', control=list(trace=TRACE))
-##  res[['rconjgrad']] = rconjgrad::conj_grad(par=par, fn = fn, gr = gr, max_iter = 30L, line_search='mt')
-##  res[['rconjgrad']]$convergence = as.integer(NA)
-##  #res[['optimCG']] = optim(par = par, fn = fn, gr = gr, method='CG', control = list(maxit = 1000))
-##  res[['optimLBFGSB']] = optim(par = par, fn = fn, gr = gr, method='L-BFGS-B', control = list(maxit = 2000))
-##  res[['lbfgsb3c']] = lbfgsb3c::lbfgsb3c(par = par, fn = fn, gr = gr, control = list(maxit = 2000))
-##  if (is.null(res[['lbfgsb3c']]$convergence)) {
-##    res[['lbfgsb3c']]$convergence = -1L
-##  }
-##  do.call(rbind, lapply(res, function (r) {
-##    x = as.data.frame(r[c('value', 'convergence')])
-##    x[['function']] = r[['counts']][1]
-##    x[['gradient']] = r[['counts']][2]
-##    x
-##  }))
-##}
-##
-##set.seed(3)
-##
-##test_fns = list()
-##test_fns[['Booth']] =
-##  list(par= c(-3,-3),
-##       fn = function (x) (x[1]+2.*x[2]-7.)^2. + (2.*x[1]+x[2]-5)^2.,
-##       gr = NULL)
-##test_fns[['Beale']] =
-##  list(par= c(0.2,-3),
-##       fn = function (x) (1.5-x[1]+x[1]*x[2])^2. + (2.25-x[1]+x[1]*x[2]^2.)^2. + (2.625-x[1]+x[1]*x[2]^3.)^2.,
-##       gr = NULL)
-##test_fns[['Bohachevsky']] =
-##  list(par=c(-2.7,1.9),
-##       fn = function (x) x[1]^2. + 2*x[2]^2. -.3*cos(3.*pi*x[1])*cos(4.*pi*x[2]) + .3,
-##       gr = NULL)
-##test_fns[['Six-Hump Camel']] =
-##  list(par=c(2,2),
-##       fn = function (x) (4-2.1*x[1]^2.+(x[1]^4.)/3.)*x[1]^2. + x[1]*x[2] + (-4.+4.*x[2]^2.)*x[2]^2.,
-##       gr = NULL)
-##test_fns[['Matyas']] =
-##  list(par=c(8,-5),
-##       fn = function (x) 0.26*(x[1]^2. + x[2]^2.)-0.48*x[1]*x[2],
-##       gr = NULL)
-##test_fns[['McCormick']] =
-##  list(par=c(-1.4,3.5)*4,
-##       fn = function (x) sin(x[1]+x[2])+(x[1]-x[2])^2-1.5*x[1]+2.5*x[2]+1.,
-##       gr = NULL)
-##test_fns[['Zakharov']] =
-##  list(par=c(-2.318,-0.3,-1.9,-2.01, -3.32,-1.2, 4.0, 0.3,1.2,-0.1,-4,-.3,-1.2,1.2,0.5,-2.1,2.193,
-##             2.318,-3.3,-1,-0.01, -3.32,-1.2, 4.0, 0.3,1.2,-0.1,-4,-.3,-1.2,1.2,0.5,-2.1,2.193)*3,
-##       fn = function (x) sum(x^2.)+(sum(0.5*(1:length(x))*x))^2. + (sum(0.5*(1:length(x))*x))^4.,
-##       gr = NULL)
-##test_fns[['Rosenbrock2']] =
-##  list(par= c(1.1,-4.5),
-##       fn = function (x) sum(100 * (x[2:length(x)] - x[1:(length(x)-1L)]^2L)^2L + (x[1:(length(x)-1L)])^2L),
-##       gr = NULL)
-##test_fns[['Rosenbrock50']] =
-##  list(par= rnorm(50)*3,
-##       fn = function (x) sum(100 * (x[2:length(x)] - x[1:(length(x)-1L)]^2L)^2L + (x[1:(length(x)-1L)])^2L),
-##       gr = NULL)
-##test_fns[['Rosenbrock70']] =
-##  list(par= rnorm(380)*4,
-##       fn = function (x) sum(100 * (x[2:length(x)] - x[1:(length(x)-1L)]^2L)^2L + (x[1:(length(x)-1L)])^2L),
-##       gr = NULL)
-##nqm = rnorm(50000)*2
-##test_fns[['NearQuadraticHuge']] =
-##  list(par= rnorm(50000)*4,
-##       fn = function (x) (sum((x - nqm)^2.) + exp(-sum(x*x)) + .02 * sum(abs(x)))/10000,
-##       gr = function (x) (2*(x - nqm) + exp(-sum(x*x))*-2.*x + .02*sign(x))/10000)
-##for (i in seq_along(test_fns)) {
-##  r = tester(test_fns[[i]]$par, test_fns[[i]]$fn,
-##             if (is.null(test_fns[[i]]$gr))
-##               function (x) numDeriv::grad(test_fns[[i]]$fn, x)
-##             else test_fns[[i]]$gr)
-##  cat('----', names(test_fns)[i], '\n')
-##  print(r)
-##}
-
 
