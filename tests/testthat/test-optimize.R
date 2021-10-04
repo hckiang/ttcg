@@ -22,6 +22,5 @@ test_that("Convergence", {
   expect_equal(r$value, 0.)
   r = ttcg(par = par/8, fn = fn, gr = gr, method='TTCG')
   expect_equal(r$value, 0.)
-  ##print(r$count)
 })
 

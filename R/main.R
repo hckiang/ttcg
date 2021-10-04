@@ -1,12 +1,12 @@
 #' ttcg: Three-term conjugate gradient minimization algorithms
 #'
-#' The ttcg package implements several Neculai Andrei's three-term conjugate gradient algorithms.
+#' Some accelerated three-term conjugate gradient algorithms implemented purely in R with the same user interface as optim(). The search directions and acceleration scheme is described in Andrei, N. (2013) <doi:10.1016/j.amc.2012.11.097>, Andrei, N. (2013) <doi:10.1016/j.cam.2012.10.002>, and Andrei, N (2015) <doi:10.1007/s11075-014-9845-9>. Line search is done by a hybrid algorithm incorporating the ideas in Oliveia and Takahashi (2020) <doi:10.1145/3423597> and More and Thuente (1994) <doi:10.1145/192115.192132>.
 #' 
 #' @author Hao Chi Kiang, \email{hello@hckiang.com}
 #' @docType package
-#' @name ttcg
+#' @aliases ttcg-package
 #' @importFrom numDeriv grad
-NULL
+'_PACKAGE'
 
 
 maybe = function (L, name, default)   if (is.null(L[[name]])) default else L[[name]]
@@ -15,9 +15,22 @@ printf = function (trace, fmt, ...)   if (trace) cat(sprintf(fmt, ...))
 #' Accelerated three-term conjugate gradient optimization with restart
 #'
 #' The \code{ttcg} function minimizes a given function using several Neculai Andrei's
-#' three-term conjugate gradient algorithms. Line search is done by a bisection-like
-#' weak-Wolfe search inspired by Oliveira and Takahashi's interpolate-truncate-project
-#' algorithm and More-Thuente algorithm.
+#' three-term conjugate gradient algorithms.
+#'
+#' By default, the algorithm stops when any one of the following three convergence tests
+#' is satisfied. (1) The squared Euclidean norm of the squared Euclidean norm of the
+#' gradient is smaller than a tolerance; (2) The infinity norm of the gradient is smaller
+#' than a tolerance; (3) \eqn{|f_{k+1} - f_k| < \epsilon * (1 + |f_k|)}. These three
+#' tolerances can be set in the \code{control} argument, and turnt off by setting them
+#' to any negative values. If all three were turnt off, the algorithm may never stop.
+#' 
+#' The \code{method} argument specifies how the search direction in each step is computed.
+#' Please see the three Neculai Andrei's three papers in the citation section for more
+#' detailed description. An acceleration scheme and a restart procedure are implemented
+#' according to his three papers. Line search is done by a bisection-like
+#' weak-Wolfe search described in Oliveira and Takahashi's (2020) interpolate-truncate-project
+#' algorithm, but replacing their gradient-secant interpolation with More-Thuente's (1994)
+#' cubic interpolation idea.
 #' 
 #' The \code{control} argument is a list that can contain any of the following named
 #' element:
@@ -25,7 +38,7 @@ printf = function (trace, fmt, ...)   if (trace) cat(sprintf(fmt, ...))
 #'     \describe{
 #'       \item{maxit}{The maximal number of iteration. Default is 500.}
 #'       \item{gl2tol}{A positive small number. The iteration will be terminated if the
-#'                     squared Euclidean norm is smaller than this number. Default is
+#'                     squared Euclidean norm of the gradient is smaller than this number. Default is
 #'                     \code{min(1e-9, length(par)*1e-10)}. To turn off this test,
 #'                     set it to any negative values.}
 #'       \item{gmaxtol}{A positive small number. The iteration will be terminated if the infinity norm of the graident is smaller than
@@ -43,7 +56,8 @@ printf = function (trace, fmt, ...)   if (trace) cat(sprintf(fmt, ...))
 #' @param fn       A function to be minimized. It should accept a numerical vector as its sole
 #'                 argument and return a scaler.
 #' @param gr       The gradient function of \code{fn}. It should accept the same argument as \code{fn}
-#'                 and return a vector of the same length as \code{par}.
+#'                 and return a vector of the same length as \code{par}. If it is \code{NULL} then
+#'                 numerical finite difference is used to obtain the gradient.
 #' @param method   A character string, one of 'TTDES', 'TTCG', 'THREECG'. This determines how the
 #'                 line search direction is computed. 'TTDES' is the default method.
 #' @param control  A list of control parameters. See Details.
@@ -56,8 +70,9 @@ printf = function (trace, fmt, ...)   if (trace) cat(sprintf(fmt, ...))
 #'                               used during the optimization.}
 #'                 \item{convergence}{An integer indicating convergence status. '0' means successful convergence; '1'
 #'                                    means \code{maxit} has been reached; '2' means a line search failure in which
-#'                                    a point that satisfies the weak Wolfe condition is not found (perhaps the function
-#'                                    is unbounded below).}
+#'                                    a point that satisfies the weak Wolfe condition is not found. Among other possibilities,
+#'                                    this may happen when the function is unbounded below or the function is
+#'                                    non-differentiable.)}
 #'                 \item{message}{A character string giving additional message.}
 #'               }
 #' @references   Andrei, N. (2013). On three-term conjugate gradient algorithms for unconstrained optimization. Applied Mathematics and Computation, 219(11), 6316-6327.
@@ -65,6 +80,12 @@ printf = function (trace, fmt, ...)   if (trace) cat(sprintf(fmt, ...))
 #' @references   Andrei, N. (2015). A new three-term conjugate gradient algorithm for unconstrained optimization. Numerical Algorithms, 68(2), 305-321.
 #' @references   Oliveira, I. F., & Takahashi, R. H. (2020). An Enhancement of the Bisection Method Average Performance Preserving Minmax Optimality. ACM Transactions on Mathematical Software (TOMS), 47(1), 1-24.
 #' @references   More, J. J., & Thuente, D. J. (1994). Line search algorithms with guaranteed sufficient decrease. ACM Transactions on Mathematical Software (TOMS), 20(3), 286-307.
+#' @examples
+#' nqm= rnorm(500)*2
+#' fn = function (x,nqm1) sum((x - nqm1)^2.)
+#' gr = function (x,nqm1) 2.*(x - nqm1)
+#' r = ttcg(par = rnorm(500)*4., fn = fn, gr = gr, method='TTDES', nqm=nqm)
+#' all.equal(r$value, 0.0)
 #' @export
 ttcg = function (par, fn, gr = NULL, method='TTDES', control = list(), ...) {
   mode(par) = 'double'
