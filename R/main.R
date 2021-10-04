@@ -81,7 +81,9 @@ ttcg = function (par, fn, gr = NULL, method='TTDES', control = list(), ...) {
 
   npar = length(par)
   if (is.null(gr)) {
-    gr = function (x) numDeriv::grad(fn, x, ...)
+    gr = function (x, ...) {
+      numDeriv::grad(func=fn, x=x, method="Richardson", side=NULL, method.args=list(), ...)
+    }
   }
   extra_arg = list(...)
   xk    = par
