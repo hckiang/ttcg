@@ -23,16 +23,16 @@ printf = function (trace, fmt, ...)   if (trace) cat(sprintf(fmt, ...))
 #' element:
 #'
 #'     \describe{
-#'       \item{maxit}{The maximal number of iteration.}
+#'       \item{maxit}{The maximal number of iteration. Default is 500.}
 #'       \item{gl2tol}{A positive small number. The iteration will be terminated if the
 #'                     squared Euclidean norm is smaller than this number. Default is
-#'                     \code{min(1e-5, length(par))*1e-7)}. To turn off this test,
+#'                     \code{min(1e-9, length(par)*1e-10)}. To turn off this test,
 #'                     set it to any negative values.}
 #'       \item{gmaxtol}{A positive small number. The iteration will be terminated if the infinity norm of the graident is smaller than
 #'                      \code{gmaxtol}. Default is 1e-6. To turn off this test, set it to any negative values.}
 #'       \item{ftol}{A positive small number. The iteration will be terminated if \eqn{|f_{k+1} - f_k| < ftol * (1 + |f_k|)}.
 #'                   To turn off this test, set it to any negative values.}
-#'       \item{c1}{The line search parameter for the sufficient descent condition. Default is 1e-4.}
+#'       \item{c1}{The line search parameter for the sufficient descent condition. Default is 1e-3.}
 #'       \item{c2}{The line search parameter for the curvature condition. Default is 0.08.}
 #'       \item{trace}{Either TRUE or FALSE, indicating whether or not details should be printed to the terminal
 #'                    during the optimization. Default is FALSE.}
@@ -70,12 +70,13 @@ ttcg = function (par, fn, gr = NULL, method='TTDES', control = list(), ...) {
   mode(par) = 'double'
   dim(par)  = NULL
 
-  maxit  = maybe(control, 'maxit', 1000L)
-  gl2tol = maybe(control, 'gl2tol', min(1e-5, length(par))*1e-7)  ## each of the gk1 < 1e-6
+  maxit  = maybe(control, 'maxit', 500L)
+  gl2tol = maybe(control, 'gl2tol', min(1e-9, length(par)*1e-10))  ## each of the gk1 < 1e-6
   gmaxtol= maybe(control, 'gmaxtol', 1e-6)
   ftol   = maybe(control, 'ftol', 1e-9)
-  c1     = maybe(control, 'c1',  1e-4)
+  c1     = maybe(control, 'c1',  1e-3)
   c2     = maybe(control, 'c2',  .08)
+
   trace  = maybe(control, 'trace', FALSE)
 
   npar = length(par)
@@ -166,27 +167,26 @@ ttcg = function (par, fn, gr = NULL, method='TTDES', control = list(), ...) {
            })
 
     ## If dk1 is way smaller than gk1 on restart this will explode.
-    #tee0_init = tee1 * min(sqrt(sum(dk*dk)/sum(dk1*dk1)), 1./sqrt(sum(gk*gk)))
     tee0_init = tee1 * sqrt(sum(dk*dk)/sum(dk1*dk1))
     printf(trace, '***** ')
-    if (abs(sum(gk1*gk)) > 0.2*sum(gk1*gk1)) {
+    if (abs(sum(gk1*gk)) > 0.2*(gknorm=sum(gk1*gk1))) {
       dk1 = -gk1
       printf(trace, '%-9s  ', 'RESTART')
     } else {
       printf(trace, '%-9s  ', 'CARRYON')
     }
     
-    printf(trace, 'CURR_STEP=%-10f   GUESSED_STEP=%-10f\n', tee1, tee0_init)
+    printf(trace, 'CURR_STEP=%-10f   GUESSED_STEP=%-10f   FVAL=%-10f   GNORM=%-10f\n', tee1, tee0_init, fk1, sqrt(gknorm))
     dk = dk1
     gk = gk1
     fk = fk1
     xk = xk1
   }
-  printf(trace, '\nThe algorithm has stopped at iteratiion %d, because:\n', itcnt)
-  printf(trace, '%s\n', msg)
   if (convergence == 1L) {
     msg = 'Maximum number iteration has been reached.'
   }
+  printf(trace, '\nThe algorithm has stopped at iteratiion %d, because:\n', itcnt)
+  printf(trace, '%s\n', msg)
   list(par = xk1, value = fk1, counts=c('function'=fevl, gradient=gevl), convergence=convergence, message=msg)
 }
 
@@ -240,7 +240,7 @@ itppt = function (j, fleft, fright, gleft, gright, a, beta, nhalf, eps, n0, kap1
   xtil
 }
 
-weak_wolfe_search =  function(fn, gr, x0, dk, f0, g0, c1, c2, extra_arg,tee0=1., n0=1, kap1=.07, kap2=2.5, loopmax = 30L, trace = FALSE, ...) {
+weak_wolfe_search =  function(fn, gr, x0, dk, f0, g0, c1, c2, extra_arg,tee0=1., n0=1, kap1=.1, kap2=2.565672, loopmax = 30L, trace = FALSE, ...) {
   a    = 0.
   beta = Inf
   tmp  = numeric(1L)
@@ -259,7 +259,7 @@ weak_wolfe_search =  function(fn, gr, x0, dk, f0, g0, c1, c2, extra_arg,tee0=1.,
   j       = 0L
   feval   = 0L
   geval   = 0L
-  printf(trace, '%-8s%13s%13s%13s%13s%13s%13s%13s\n', "FINDWOLF", 'a', 'b', 't',
+  printf(trace, '%-8s %14s %15s %15s %15s %15s %15s %15s\n', "FINDWOLF", 'a', 'b', 't',
          'f_a', 'f_b', 'g_a', 'g_b')
   while (TRUE) {
     xk1 = x0 + tee1 * dk
@@ -282,7 +282,7 @@ weak_wolfe_search =  function(fn, gr, x0, dk, f0, g0, c1, c2, extra_arg,tee0=1.,
       geval = geval + 1L
 
       tee1 = itppt(j, fleft, fright, gdirleft, gdirright, a, beta, nhalf, eps, n0, kap1, kap2)
-      printf(trace, '%-8s%13f%13f%13f%13f%13f%13f%13f\n', "CONTRACT", a, beta, tee1,
+      printf(trace, '%-7s %15.9f %15.9f %15.9f %15.9f %15.9f %15.9f %15.9f\n', "RIGHT", a, beta, tee1,
                     fleft, fright, gdirleft, gdirright)
       j = j + 1L
       if (j >= nmax) {
@@ -301,7 +301,7 @@ weak_wolfe_search =  function(fn, gr, x0, dk, f0, g0, c1, c2, extra_arg,tee0=1.,
       fleft    = fk1
       tee1 = if (beta < Inf)  {
                r = itppt(j, fleft, fright, gdirleft, gdirright, a, beta, nhalf, eps, n0, kap1, kap2)
-               printf(trace, '%-8s%13f%13f%13f%13f%13f%13f%13f\n', "EXPAND", a, beta, r,
+               printf(trace, '%-7s %15.9f %15.9f %15.9f %15.9f %15.9f %15.9f %15.9f\n', "LEFT", a, beta, r,
                       fleft_p, fleft, gdirleft_p, gdirleft)
                j = j + 1L
                if (j >= nmax) {
@@ -313,12 +313,12 @@ weak_wolfe_search =  function(fn, gr, x0, dk, f0, g0, c1, c2, extra_arg,tee0=1.,
                r
              } else {
                r = extrap(a_p, a, fleft_p, fleft, gdirleft_p, gdirleft, c2)
-               printf(trace, '%-8s%13f%13f%13f%13f%13f%13f%13f\n', "EXPAND", a, beta, r,
+               printf(trace, '%-7s %15.9f %15.9f %15.9f %15.9f %15.9f %15.9f %15.9f\n', "EXTRAP", a, beta, r,
                       fleft_p, fleft, gdirleft_p, gdirleft)
                r
              }
     } else {
-      printf(trace, '%-8s%13s%13s%13f%13f%13s%13f%13s\n', "SATISFY", '', '', tee1,
+      printf(trace, '%-7s %15s %15s %15.9f %15.9f %15s %15.9f %15s\n', "SATISFY", '', '', tee1,
              fk1, '', gdir, '')
       geval = geval + 1L
       break
@@ -346,14 +346,15 @@ extrap = function (a0, a, f0, fleft, gdir0, gdirleft, c2) {
 
 
 
-
-##
+##TRACE=F
 ##tester = function (par, fn, gr) {
 ##  res = list()
-##  res[['MINE']] = ttcg(par = par, fn = fn, gr = gr, method='TTCG')
+##  res[['MINE']] = ttcg(par = par, fn = fn, gr = gr, method='TTDES', control=list(trace=TRACE))
+##  res[['rconjgrad']] = rconjgrad::conj_grad(par=par, fn = fn, gr = gr, max_iter = 30L, line_search='mt')
+##  res[['rconjgrad']]$convergence = as.integer(NA)
 ##  #res[['optimCG']] = optim(par = par, fn = fn, gr = gr, method='CG', control = list(maxit = 1000))
-##  res[['optimLBFGSB']] = optim(par = par, fn = fn, gr = gr, method='L-BFGS-B', control = list(maxit = 1000))
-##  res[['lbfgsb3c']] = lbfgsb3c::lbfgsb3c(par = par, fn = fn, gr = gr, control = list(maxit = 1000))
+##  res[['optimLBFGSB']] = optim(par = par, fn = fn, gr = gr, method='L-BFGS-B', control = list(maxit = 2000))
+##  res[['lbfgsb3c']] = lbfgsb3c::lbfgsb3c(par = par, fn = fn, gr = gr, control = list(maxit = 2000))
 ##  if (is.null(res[['lbfgsb3c']]$convergence)) {
 ##    res[['lbfgsb3c']]$convergence = -1L
 ##  }
@@ -365,7 +366,7 @@ extrap = function (a0, a, f0, fleft, gdir0, gdirleft, c2) {
 ##  }))
 ##}
 ##
-##set.seed(1)
+##set.seed(3)
 ##
 ##test_fns = list()
 ##test_fns[['Booth']] =
@@ -412,8 +413,8 @@ extrap = function (a0, a, f0, fleft, gdir0, gdirleft, c2) {
 ##nqm = rnorm(50000)*2
 ##test_fns[['NearQuadraticHuge']] =
 ##  list(par= rnorm(50000)*4,
-##       fn = function (x) sum((x - nqm)^2.) + exp(-sum(x*x)),
-##       gr = function (x) 2*(x - nqm) + exp(-sum(x*x))*-2.*x)
+##       fn = function (x) (sum((x - nqm)^2.) + exp(-sum(x*x)) + .02 * sum(abs(x)))/10000,
+##       gr = function (x) (2*(x - nqm) + exp(-sum(x*x))*-2.*x + .02*sign(x))/10000)
 ##for (i in seq_along(test_fns)) {
 ##  r = tester(test_fns[[i]]$par, test_fns[[i]]$fn,
 ##             if (is.null(test_fns[[i]]$gr))
@@ -422,5 +423,5 @@ extrap = function (a0, a, f0, fleft, gdir0, gdirleft, c2) {
 ##  cat('----', names(test_fns)[i], '\n')
 ##  print(r)
 ##}
-##
+
 
