@@ -76,7 +76,7 @@ test_that('NaN at init. param', {
 
 test_that('NaN failure at line search param', {
   fn = function (x) if (sum(x*x) <.000000001) sum((x-2^40.)^2.) else NaN
-  gr = function (x) if (sum(x*x) <.000000001) 2.*(x-2^40.)      else NaN
+  gr = function (x) if (sum(x*x) <.000000001) 2.*(x-2^40.)      else rep(NaN, length(x))
   r = ttcg(par = c(.0,.000000001/2.), fn = fn, gr = gr, method='TTCG')
   expect_equal(r$convergence, 7L)
   expect_gt(r$counts['function'], c('function'=5L))
@@ -86,7 +86,7 @@ test_that('NaN failure at line search param', {
 
 test_that('NaN success at line search param', {
   fn = function (x) if (sqrt(sum(x*x)) <1.48) sum((x-1.)^2.) else NaN
-  gr = function (x) if (sqrt(sum(x*x)) <1.48) 2.*(x-1.)      else NaN
+  gr = function (x) if (sqrt(sum(x*x)) <1.48) 2.*(x-1.)      else rep(NaN, length(x))
   r = ttcg(par = c(-0.03,0.03), fn = fn, gr = gr, method='THREECG')
   expect_equal(r$convergence, 0L)
   expect_gt(r$counts['function'], c('function'=1L))
@@ -96,7 +96,7 @@ test_that('NaN success at line search param', {
 
 test_that('1-D function', {
   fn = function (x) if (sqrt(sum(x*x)) <1.48) sum((x-1.)^2.) else NaN
-  gr = function (x) if (sqrt(sum(x*x)) <1.48) 2.*(x-1.)      else NaN
+  gr = function (x) if (sqrt(sum(x*x)) <1.48) 2.*(x-1.)      else rep(NaN, length(x))
   formeth(function (m) {
     r = ttcg(par = -0.03, fn = fn, gr = gr, method=m)
     expect_equal(r$convergence, 0L)
@@ -108,7 +108,7 @@ test_that('1-D function', {
 
 test_that('NA failure', {
   fn = function (x) if (sqrt(sum(x*x)) <1.48) sum((x-1.)^2.) else NA
-  gr = function (x) if (sqrt(sum(x*x)) <1.48) 2.*(x-1.)      else NA
+  gr = function (x) if (sqrt(sum(x*x)) <1.48) 2.*(x-1.)      else rep(NA, length(x))
   r = ttcg(par = c(-0.03,0.03), fn = fn, gr = gr, method='THREECG')
   expect_equal(r$convergence, 101L)
   expect_gt(r$counts['function'], c('function'=1L))
@@ -118,7 +118,7 @@ test_that('NA failure', {
 
 test_that('-Inf failure', {
   fn = function (x) if (sqrt(sum(x*x)) <1.48) sum((x-1.)^2.) else -Inf
-  gr = function (x) if (sqrt(sum(x*x)) <1.48) 2.*(x-1.)      else -Inf
+  gr = function (x) if (sqrt(sum(x*x)) <1.48) 2.*(x-1.)      else rep(-Inf, length(x))
   r = ttcg(par = c(-0.03,0.03), fn = fn, gr = gr, method='THREECG')
   expect_equal(r$convergence, 101L)
   expect_gt(r$counts['function'], c('function'=1L))
@@ -128,7 +128,7 @@ test_that('-Inf failure', {
 
 test_that('Inf success', {
   fn = function (x) if (sqrt(sum(x*x)) <1.48) sum((x-1.)^2.) else Inf
-  gr = function (x) if (sqrt(sum(x*x)) <1.48) 2.*(x-1.)      else Inf
+  gr = function (x) if (sqrt(sum(x*x)) <1.48) 2.*(x-1.)      else rep(Inf, length(x))
   r = ttcg(par = c(-0.03,0.03), fn = fn, gr = gr, method='THREECG')
   expect_equal(r$convergence, 0L)
   expect_gt(r$counts['function'], c('function'=1L))
@@ -172,5 +172,87 @@ test_that('Maximum iteration', {
   gr = function (x,nqm1) 2.*(x - nqm1) + exp(-sum(x*x)) * -2.*x
   r = ttcg(par = par, fn = fn, gr = gr, method='THREECG', control=list(maxit=1), nqm1=nqm)
   expect_equal(r$convergence, 1L)
+})
+
+test_that('NaN in initial parameters', {
+  fn = function (x) as.complex( list(sum((x-1.)^2.)) )
+  gr = function (x) as.complex( as.list(2.*(x-1.)) )
+  r = ttcg(par = c(NaN,0.03), fn = fn, gr = gr, method='TTDES')
+  expect_equal(r$convergence, 107L)
+  expect_equal(r$counts['function'], c('function'=0L))
+  expect_equal(r$counts['gradient'], c('gradient'=0L))
+  expect_true(identical(r$value, as.double(NA)))
+})
+
+test_that('Zero-length initial parameters', {
+  fn = function (x) as.complex( list(sum((x-1.)^2.)) )
+  gr = function (x) as.complex( as.list(2.*(x-1.)) )
+  r = ttcg(par = double(0L), fn = fn, gr = gr, method='TTDES')
+  expect_equal(r$convergence, 106L)
+  expect_equal(r$counts['function'], c('function'=0L))
+  expect_equal(r$counts['gradient'], c('gradient'=0L))
+  expect_true(identical(r$value, as.double(NA)))
+})
+
+test_that('Infinite initial parameters', {
+  fn = function (x) as.complex( list(sum((x-1.)^2.)) )
+  gr = function (x) as.complex( as.list(2.*(x-1.)) )
+  r = ttcg(par = c(Inf, 3.0), fn = fn, gr = gr, method='TTDES')
+  expect_equal(r$convergence, 108L)
+  expect_equal(r$counts['function'], c('function'=0L))
+  expect_equal(r$counts['gradient'], c('gradient'=0L))
+  expect_true(identical(r$value, as.double(NA)))
+})
+
+test_that('Maximization', {
+  fn = function (x) as.complex( list(-sum((x-1.)^2.)) )
+  gr = function (x) as.complex( as.list(-2.*(x-1.)) )
+  r = ttcg(par = c(1.0, 3.0), fn = fn, gr = gr, method='TTCG', control=list(fnscale = -10.0))
+  expect_equal(r$convergence, 0L)
+  expect_gt(r$counts['function'], c('function'=2L))
+  expect_gt(r$counts['gradient'], c('gradient'=2L))
+  expect_equal(r$value, 0.0)
+})
+
+test_that('Maximization failure', {
+  fn = function (x) as.complex( list(-sum((x-1.)^2.)) )
+  gr = function (x) as.complex( as.list(-2.*(x-1.)) )
+  r = ttcg(par = c(1.0, 3.0), fn = fn, gr = gr, method='TTCG', control=list(fnscale = Inf))
+  expect_equal(r$convergence, 112L)
+  expect_equal(r$counts['function'], c('function'=0L))
+  expect_equal(r$counts['gradient'], c('gradient'=0L))
+  expect_true(identical(r$value, as.double(NA)))
+})
+
+test_that('Parscale #1', {
+  fn = function (x) if (sqrt(sum(x*x)) <1.48) sum((x-1.)^2.) else Inf
+  gr = function (x) if (sqrt(sum(x*x)) <1.48) 2.*(x-1.)      else rep(Inf, length(x))
+  r = ttcg(par = c(-0.03,0.03), fn = fn, gr = gr, method='THREECG', control=list(fnscale = 3.5, parscale=c(.1,.1)))
+  expect_equal(r$convergence, 0L)
+  expect_gt(r$counts['function'], c('function'=2L))
+  expect_gt(r$counts['gradient'], c('gradient'=2L))
+  expect_equal(r$value, 0.0)
+})
+
+test_that('Parscale #2', {
+  fn = function (x) -sum((x-1.)^2.)
+  gr = function (x) -2.*(x-1.)
+  ## Very badly scaled.
+  r = ttcg(par = c(-0.03,2.03), fn = fn, gr = gr, method='THREECG', control=list(fnscale = -.5, parscale=c(-100,-.001)))
+  expect_equal(r$convergence, 0L)
+  expect_gt(r$counts['function'], c('function'=2L))
+  expect_gt(r$counts['gradient'], c('gradient'=2L))
+  expect_equal(r$value, 0.0)
+})
+
+test_that('Parscale failure', {
+  fn = function (x) -sum((x-1.)^2.)
+  gr = function (x) -2.*(x-1.)
+  ## Very badly scaled.
+  r = ttcg(par = c(-0.03,2.03), fn = fn, gr = gr, method='THREECG', control=list(fnscale = -.5, parscale=c(0.0,-.001)))
+  expect_equal(r$convergence, 123L)
+  expect_equal(r$counts['function'], c('function'=0L))
+  expect_equal(r$counts['gradient'], c('gradient'=0L))
+  expect_true(identical(r$value, as.double(NA)))
 })
 

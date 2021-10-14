@@ -15,6 +15,35 @@ force_name = function (X, n) {
 my_is_na   = function (obj) is.na(obj) & !(is.nan(obj))  ## Because is.na(NaN)==T and identical() isn't vectorized.
 maybe      = function (L, name, default)  if (is.null(L[[name]])) default else L[[name]]
 printf     = function (trace, fmt, ...)   if (trace) cat(sprintf(fmt, ...))
+big_brother= function (f, g) {
+  list(fn=function (xk, extra_arg, penv, reskey, fevlkey) {
+         penv[[fevlkey]] = penv[[fevlkey]] + 1L
+         penv[[reskey]]  = do.call(f, c(list(xk*penv[['parscale']]), extra_arg))
+         mode(penv[[reskey]]) = 'double'
+         if ({length(penv[[reskey]]) != 1L    && { 'Objective function has returned a vector with length >= 1'                            -> penv[['msg']]; T }} ||
+             {my_is_na(penv[[reskey]])        && { 'Objective function has returned NA or something that cannot be coerced to `double`'   -> penv[['msg']]; T }} ||
+             {identical(penv[[reskey]],-Inf)  && { 'Objective function has returned -Inf'                                                 -> penv[['msg']]; T }}) {
+           penv[['convergence']] = 101L
+           F
+         } else {
+           penv[[reskey]] = penv[[reskey]]/penv[['fnscale']]
+           T
+         }
+       },
+       gr=function (xk, extra_arg, penv, reskey, gevlkey) {
+         penv[[gevlkey]] = penv[[gevlkey]] + 1L
+         penv[[reskey]]  = do.call(g, c(list(xk*penv[['parscale']]), extra_arg))
+         mode(penv[[reskey]]) = 'double'
+         if ({length(penv[[reskey]]) != length(xk) && { 'Gradient function has returned a vector with an incorrect length'                 -> penv[['msg']]; T }} ||
+             {any(my_is_na(penv[[reskey]]))        && { 'Gradient vector contains NA or something that cannot be coerced to `double`'      -> penv[['msg']]; T }}) {
+           penv[['convergence']] = 101L
+           F
+         } else {
+           penv[[reskey]] = penv[[reskey]]/penv[['fnscale']]*penv[['parscale']]
+           T
+         }
+       })
+}
 
 #' Accelerated three-term conjugate gradient optimization with restart
 #'
@@ -28,6 +57,13 @@ printf     = function (trace, fmt, ...)   if (trace) cat(sprintf(fmt, ...))
 #' tolerances can be set in the \code{control} argument, and turnt off by setting them
 #' to any negative values. If all three were turnt off, the algorithm may never stop.
 #' 
+#' For minimization problems, in which \code{fnscale} is positive, the objective function
+#' can return \code{NaN} or \code{Inf} but \code{NA} or \code{-Inf} will results in the algorithm being stopped
+#' immediately, because \code{-Inf} means the function is unbounded below and any arithmetic error, such as dividing
+#' by zero, should be coded as \code{NaN}; while \code{NA} should signify programming error. For maximization problems,
+#' \code{-Inf} instead of \code{Inf} is allowed. The gradient function, similarly, can contain \code{NaN}, \code{Inf},
+#' or \code{-Inf}, but returning \code{NA} will stop the algorithm.
+#'
 #' The \code{method} argument specifies how the search direction in each step is computed.
 #' Please see the three Neculai Andrei's three papers in the citation section for more
 #' detailed description. An acceleration scheme and a restart procedure are implemented
@@ -41,6 +77,8 @@ printf     = function (trace, fmt, ...)   if (trace) cat(sprintf(fmt, ...))
 #'
 #'     \describe{
 #'       \item{maxit}{The maximal number of iteration. Default is 500.}
+#'       \item{fnscale}{Scalar to divide fn and gr during optimization. If negative, turns the problem into a maximization problem. Optimization is performed on \code{fn(par)/fnscale}.}
+#'       \item{parscale}{A vector of scaling values for the parameters. Optimization is performed on \code{par/parscale} and these should be comparable in the sense that a unit change in any element produces about a unit change in the scaled value.}
 #'       \item{gl2tol}{A positive small number. The iteration will be terminated if the
 #'                     squared Euclidean norm of the gradient is smaller than this number. Default is
 #'                     \code{min(1e-9, length(par)*1e-10)}. To turn off this test,
@@ -63,7 +101,7 @@ printf     = function (trace, fmt, ...)   if (trace) cat(sprintf(fmt, ...))
 #'                 and return a vector of the same length as \code{par}. If it is \code{NULL} then
 #'                 numerical finite difference is used to obtain the gradient.
 #' @param method   A character string, one of 'TTDES', 'TTCG', 'THREECG'. This determines how the
-#'                 line search direction is computed. 'TTDES' is the default method.
+#'                 line search direction is computed. 'TTCG' is the default method.
 #' @param control  A list of control parameters. See Details.
 #' @param ...      Extra arguments to be passed to \code{fn}
 #' @return         A list containing the following named elements.
@@ -91,67 +129,109 @@ printf     = function (trace, fmt, ...)   if (trace) cat(sprintf(fmt, ...))
 #' r   = ttcg(par = rnorm(500)*4., fn = fn, gr = gr, method='TTDES', nqm=nqm)
 #' all.equal(r$value, 0.0)
 #' @export
-ttcg = function (par, fn, gr = NULL, method='TTDES', control = list(), ...) {
+ttcg = function (par, fn, gr = NULL, method='TTCG', control = list(), ...) {
   parnames  = names(par)
   mode(par) = 'double'
   dim(par)  = NULL
+  npar = length(par)
 
-  maxit  = maybe(control, 'maxit', 500L)
-  gl2tol = maybe(control, 'gl2tol', min(1e-9, length(par)*1e-10))  ## each of the gk1 < 1e-6
-  gmaxtol= maybe(control, 'gmaxtol', 1e-6)
-  ftol   = maybe(control, 'ftol', 1e-9)
-  c1     = maybe(control, 'c1',  1e-3)
-  c2     = maybe(control, 'c2',  .08)
-  trace  = maybe(control, 'trace', FALSE)
-  
+  fevl  = 0L
+  gevl  = 0L
+  xk    = par
+  fk    = as.double(NA)
+  gk    = as.double(rep(NA, npar))
+  delayedAssign('xk1', xk)
+  delayedAssign('fk1', fk)
+  delayedAssign('gk1', gk)
+  delayedAssign('FinalRet', list(par = force_name(xk1, parnames), value = fk1, counts=c('function'=fevl, 'gradient'=gevl), convergence=convergence, message=msg))
+
+  if (npar == 0L)                {  convergence=106L;   msg='The initial parameter has zero length';    return(FinalRet)  }
+  if (any(is.na(xk)))            {  convergence=107L;   msg='The initial parameter contains NA or NaN'; return(FinalRet)  }
+  if (any(is.infinite(xk)))      {  convergence=108L;   msg='The initial parameter contains infinity';  return(FinalRet)  }
+
+  maxit   = maybe(control, 'maxit', 500L)
+  gl2tol  = maybe(control, 'gl2tol', min(1e-9, length(par)*1e-10))  ## each of the gk1 < 1e-6
+  gmaxtol = maybe(control, 'gmaxtol', 1e-6)
+  ftol    = maybe(control, 'ftol', 1e-9)
+  c1      = maybe(control, 'c1',  1e-3)
+  c2      = maybe(control, 'c2',  .08)
+  trace   = maybe(control, 'trace', FALSE)
+  fnscale = maybe(control, 'fnscale',  1.0)
+  parscale= maybe(control, 'parscale', rep(1.0, npar))
+
+  mode(fnscale) = 'double'
+  if (length(fnscale)!=1L)       {  convergence=110L;   msg='fnscale has non-one length';               return(FinalRet)  }
+  if (is.na(fnscale))            {  convergence=111L;   msg='fnscale cannot be coerced to double';      return(FinalRet)  }
+  if (is.infinite(fnscale))      {  convergence=112L;   msg='fnscale cannot be infinite';               return(FinalRet)  }
+  if (fnscale == 0.0)            {  convergence=113L;   msg='fnscale cannot be zero';                   return(FinalRet)  }
+  mode(parscale) = 'double'     
+  if (length(parscale)!=npar)    {  convergence=120L;   msg='parscale has different length from par';   return(FinalRet)  }
+  if (any(is.na(parscale)))      {  convergence=121L;   msg='parscale cannot be coerced to double';     return(FinalRet)  } 
+  if (any(is.infinite(parscale))){  convergence=122L;   msg='parscale cannot contain infinity';         return(FinalRet)  }
+  if (any(parscale == 0.0))      {  convergence=123L;   msg='parscale cannot contain zero';             return(FinalRet)  }
+  xk = xk / parscale
+  delayedAssign('FinalRet', list(par = force_name(xk1*parscale, parnames), value = fk1*fnscale, counts=c('function'=fevl, 'gradient'=gevl), convergence=convergence, message=msg))
+
   if (! (method %in% c('TTDES', 'THREECG', 'TTCG')))
     stop('Invalid method. `method` should be one of `TTDES`, `THREECG`, `TTCG`')
 
-  npar = length(par)
-  if (is.null(gr))
-    gr = function (x, ...)
-      numDeriv::grad(func=fn, x=x, method="Richardson", side=NULL, method.args=list(), ...)
+  fn_orig = fn
+  gr_orig = gr
+  R = big_brother(fn_orig, if (is.null(gr_orig)) function (x, ...) numDeriv::grad(func=fn_orig, x=x, method="Richardson", side=NULL, method.args=list(), ...)
+                           else gr_orig)
+  fn = R[['fn']]
+  gr = R[['gr']]
+  rm(R)
 
   extra_arg = list(...)
-  xk    = par
-  fevl  = 1L
-  fk    = do.call(fn, c(list(xk),extra_arg))
-  mode(fk) = 'double'
-  if (length(fk) != 1L) 
-    return(list(par = xk, value = fk, counts=c('function'=fevl, 'gradient'=0L), convergence=9L,
-                message="Objective function has returned a vector with length >= 1"))
-  if (mode(fk) != 'numeric')
-    return(list(par = xk, value = fk, counts=c('function'=fevl, 'gradient'=0L), convergence=9L,
-                message="Objective function has returned something that is not a real number"))
-  if (is.na(fk) || !is.finite(fk))
-    return(list(par = xk, value = fk, counts=c('function'=fevl, 'gradient'=0L), convergence=9L,
-                message='Objective function evaluated to NA, NaN or infinite at the initialization point'))
-  gevl  = 1L
-  gk    = do.call(gr, c(list(xk),extra_arg))
-  mode(gk) = 'double'
-  if (length(gk) != length(xk)) 
-    return(list(par = xk, value = fk, counts=c('function'=fevl, 'gradient'=gevl), convergence=10L,
-                message="Gradient function has returned a vector with an incorrect length"))
-  if (mode(gk) != 'numeric')
-    return(list(par = xk, value = fk, counts=c('function'=fevl, 'gradient'=gevl), convergence=10L,
-                message="Gradient function has returned something that is not a (real) numeric vector"))
-  if (any(is.na(gk) | !is.finite(gk)))
-    return(list(par = xk, value = fk, counts=c('function'=fevl, 'gradient'=gevl), convergence=10L,
-                message='Gradient function evaluated to a vector that contains NA, NaN or infinite at the initialization point'))
+  delayedAssign('fk1', fk)
+  delayedAssign('gk1', gk)
+  delayedAssign('xk1', xk)
+  penv  = environment()
+  if (! fn(xk, extra_arg, penv, 'fk', 'fevl'))  return(FinalRet)
+  if (is.nan(fk) || !is.finite(fk)) {
+    convergence = 9L
+    msg = 'Objective function evaluated to NA, NaN or infinite at the initialization point'
+    return(FinalRet)
+  }
+  if (! gr(xk, extra_arg, penv, 'gk', 'gevl'))  return(FinalRet)
+  if (any(is.nan(gk) | !is.finite(gk))) {
+    convergence = 9L
+    msg = 'Gradient function evaluated to a vector that contains NA, NaN or infinite at the initialization point'
+    return(FinalRet)
+  }
   dk    = -gk
   k     = 1L
   itcnt = 0L
   convergence = 1L
   msg   = NULL
-  fk1   = fk
   if ( {(max(abs(gk)) < gmaxtol)        && { "Gradient's infinite norm < gmaxtol"   -> msg; T }} ||
        {(sum(gk*gk) < gl2tol)           && { "Gradient's squared 2-norm < gl2tol"   -> msg; T }}  )
     return(list(par = xk, value = fk, counts=c('function'=fevl, 'gradient'=gevl), convergence=0L, message=msg))
 
+  compute_dk1 = switch(method,
+                  "TTDES"=quote({
+                    yksk= sum(yk*sk)
+                    skgk1=sum(sk*gk1)
+                    omega  = (2./sum(sk*sk)) *sqrt(max(0., sum(sk*sk)*sum(yk*yk) - yksk^2.))
+                    dk1 = -gk1 + (sum(yk*gk1) - omega*skgk1)/yksk * sk - skgk1/yksk*yk
+                  }),
+                  "THREECG"=quote({
+                    yksk= sum(yk*sk)
+                    skgk1=sum(sk*gk1)
+                    dk1 = -gk1 - ((1.+sum(yk*yk)/yksk)*skgk1/yksk - sum(yk*gk1)/yksk)*sk
+                          -skgk1/yksk * yk
+                  }),
+                  "TTCG"=quote({
+                    yksk= sum(yk*sk)
+                    skgk1=sum(sk*gk1)
+                    dk1 = -gk1 - ((1.+2.*sum(yk*yk)/yksk)*(skgk1/yksk) - sum(yk*gk1)/yksk)*sk
+                          - (skgk1/yksk) * yk
+                  }))
+
   tee0_init = 1./sqrt(sum(gk*gk))
-  xk1 = numeric(1L)
   while ((itcnt+1L->itcnt) < maxit) {
-    if (!(wsres <- weak_wolfe_search(fn, gr, xk, dk, f0=fk, g0=gk, extra_arg= extra_arg, c1=c1,c2=c2, tee0=tee0_init, trace = trace, penv=environment())))
+    if (!weak_wolfe_search(fn, gr, xk, dk, f0=fk, g0=gk, extra_arg=extra_arg, penv=penv, c1=c1,c2=c2, tee0=tee0_init, trace = trace))
       break
     if ( {(max(abs(gk1)) < gmaxtol)        && { "Gradient's infinite norm < gmaxtol"   -> msg; T }} ||
          {(sum(gk1*gk1) < gl2tol)          && { "Gradient's squared 2-norm < gl2tol"   -> msg; T }} ||
@@ -166,22 +246,11 @@ ttcg = function (par, fn, gr = NULL, method='TTDES', control = list(), ...) {
       xk1bkup = xk1
       fk1bkup = fk1
       gk1bkup = gk1
-
       abar = sum(gk * dk)
       xik  = -abar / bbar
       xk1  = xk + xik * tee1 * dk
-      fevl = fevl+1L
-      fk1  = do.call(fn, c(list(xk1),extra_arg))
-      mode(fk1) = 'double'
-      gevl = gevl+1L
-      gk1  = do.call(gr, c(list(xk1),extra_arg))
-      mode(gk1) = 'double'
-      if ( {my_is_na(fk1)         && { 'Objective function has returned NA'     -> msg; T }} ||
-           {identical(fk1,-Inf)   && { 'Objective function has returned -Inf'   -> msg; T }} ||
-           {any(my_is_na(gk1))    && { 'Gradient vector contains NA'            -> msg; T }}) {
-        penv[['convergence']] = 101L
-        return(F)
-      }
+      if (! fn(xk1, extra_arg, penv, 'fk1', 'fevl')) break
+      if (! gr(xk1, extra_arg, penv, 'gk1', 'gevl')) break
       if (is.nan(fk1) || fk1 == Inf || any(is.nan(gk1) | is.infinite(gk1))) {
         xk1 = xk1bkup
         fk1 = fk1bkup
@@ -198,25 +267,7 @@ ttcg = function (par, fn, gr = NULL, method='TTDES', control = list(), ...) {
       }
     }
     sk  = xk1 - xk
-    switch(method,
-           "TTDES"={
-             yksk= sum(yk*sk)
-             skgk1=sum(sk*gk1)
-             omega  = (2./sum(sk*sk)) *sqrt(max(0., sum(sk*sk)*sum(yk*yk) - yksk^2.))
-             dk1 = -gk1 + (sum(yk*gk1) - omega*skgk1)/yksk * sk - skgk1/yksk*yk
-           },
-           "THREECG"={
-             yksk= sum(yk*sk)
-             skgk1=sum(sk*gk1)
-             dk1 = -gk1 - ((1.+sum(yk*yk)/yksk)*skgk1/yksk - sum(yk*gk1)/yksk)*sk
-                   -skgk1/yksk * yk
-           },
-           "TTCG"={
-             yksk= sum(yk*sk)
-             skgk1=sum(sk*gk1)
-             dk1 = -gk1 - ((1.+2.*sum(yk*yk)/yksk)*(skgk1/yksk) - sum(yk*gk1)/yksk)*sk
-                   - (skgk1/yksk) * yk
-           })
+    eval(compute_dk1)
     tee0_init = tee1 * sqrt(sum(dk*dk)/sum(dk1*dk1))
     printf(trace, '***** ')
     if (abs(sum(gk1*gk)) > 0.2*(gknorm=sum(gk1*gk1))) {
@@ -235,7 +286,7 @@ ttcg = function (par, fn, gr = NULL, method='TTDES', control = list(), ...) {
     msg = 'Maximum number iteration has been reached.'
   printf(trace, '\nThe algorithm has stopped at iteratiion %d, because:\n', itcnt)
   printf(trace, '%s\n', msg)
-  list(par = force_name(xk1,parnames), value = fk1, counts=c('function'=fevl, 'gradient'=gevl), convergence=convergence, message=msg)
+  return(FinalRet)
 }
 
 itppt = function (j, fleft, fright, gleft, gright, a, beta, nhalf, eps, n0, kap1, kap2) {
@@ -294,41 +345,30 @@ weak_wolfe_search =  function(fn, gr, x0, dk, f0, g0, c1, c2, extra_arg, penv, t
   gdirright      = numeric(1L)
   loopcnt        = 0L
   j              = 0L
+  eps            = as.double(NA)
+  nhalf          = as.integer(NA)
+  nmax           = as.integer(NA)
   printf(trace, '%-8s %14s %15s %15s %15s %15s %15s %15s\n', "FINDWOLF", 'a', 'b', 't',
          'f_a', 'f_b', 'g_a', 'g_b')
+  reset_j = quote({
+    eps     = (beta-a)/(2^12)
+    nhalf   = ceiling(log((beta-a)/(2*eps), 2))
+    nmax    = nhalf + n0
+    j       = 0L
+  })
   repeat {
     penv[['xk1']]  = x0 + penv[['tee1']] * dk
-    penv[['fevl']] = penv[['fevl']] + 1L
-    penv[['fk1']]  = do.call(fn, c(list(penv[['xk1']]),extra_arg))
-    mode(penv[['fk1']]) = 'double'
-    penv[['gevl']] = penv[['gevl']] + 1L
-    penv[['gk1']]  = do.call(gr, c(list(penv[['xk1']]),extra_arg))
-    mode(penv[['gk1']]) = 'double'
+    if (! fn(penv[['xk1']], extra_arg, penv, 'fk1', 'fevl')) return(F)
+    if (! gr(penv[['xk1']], extra_arg, penv, 'gk1', 'gevl')) return(F)
     penv[['gdir']] = sum(penv[['gk1']]*dk)
-    if ( {my_is_na(penv[['fk1']])         && { 'Objective function has returned NA'     -> msg; T }} ||
-         {identical(penv[['fk1']], -Inf)  && { 'Objective function has returned -Inf'   -> msg; T }} ||
-         {any(my_is_na(penv[['gk1']]))    && { 'Gradient vector contains NA'            -> msg; T }}) {
-      penv[['convergence']] = 101L
-      return(F)
-    }
     while (is.nan(penv[['fk1']]) || penv[['fk1']] == Inf || any(is.nan(penv[['gk1']]) | is.infinite(penv[['gk1']]))) {
       penv[['tee1']] = penv[['tee1']] / 2.
       penv[['xk1']]  = x0 + penv[['tee1']] * dk
-      penv[['fevl']] = penv[['fevl']] + 1L
-      penv[['fk1']]  = do.call(fn, c(list(penv[['xk1']]),extra_arg))
-      mode(penv[['fk1']]) = 'double'
-      penv[['gevl']] = penv[['gevl']] + 1L
-      penv[['gk1']]  = do.call(gr, c(list(penv[['xk1']]),extra_arg))
-      mode(penv[['gk1']]) = 'double'
+      if (! fn(penv[['xk1']], extra_arg, penv, 'fk1', 'fevl')) return(F)
+      if (! gr(penv[['xk1']], extra_arg, penv, 'gk1', 'gevl')) return(F)
+      penv[['gdir']] = sum(penv[['gk1']]*dk)    ## Lazy evaluation. Will be run only if trace=T
       printf(trace, '%-7s %15.9f %15.9f %15.9f %15.9f %15.9f %15.9f %15.9f\n', "NAN/INF", a, penv[['xk1']], penv[['tee1']],
                     fleft, penv[['fk1']], gdirleft, penv[['gdir']])
-      penv[['gdir']] = sum(penv[['gk1']]*dk)    ## Lazy evaluation. Will be run only if trace=T
-      if ( {my_is_na(penv[['fk1']])         && { 'Objective function has returned NA'     -> msg; T }} ||
-           {identical(penv[['fk1']], -Inf)  && { 'Objective function has returned -Inf'   -> msg; T }} ||
-           {any(my_is_na(penv[['gk1']]))    && { 'Gradient vector contains NA'            -> msg; T }}) {
-        penv[['convergence']] = 101L
-        return(F)
-      }
       if ((loopcnt+1L->loopcnt) >= loopmax) {
         penv[['convergence']] = 7L
         penv[['msg']]         = 'Line search has failed to find a point at which neither the function nor gradient is Inf or NaN, nor is the gradient not -Inf'
@@ -338,23 +378,16 @@ weak_wolfe_search =  function(fn, gr, x0, dk, f0, g0, c1, c2, extra_arg, penv, t
     if (penv[['fk1']] > f0 + c1 * penv[['tee1']] * sum(g0*dk)) {
       if (beta == Inf) {
         beta    = penv[['tee1']]
-        eps     = (beta-a)/(2^12)
-        nhalf   = ceiling(log((beta-a)/(2*eps), 2))
-        nmax    = nhalf + n0
-        j       = 0L
+        eval(reset_j)
       } else
         beta = penv[['tee1']]
+
       fright = penv[['fk1']]
       gdirright = penv[['gdir']]
       penv[['tee1']] = itppt(j, fleft, fright, gdirleft, gdirright, a, beta, nhalf, eps, n0, kap1, kap2)
       printf(trace, '%-7s %15.9f %15.9f %15.9f %15.9f %15.9f %15.9f %15.9f\n', "RIGHT", a, beta, penv[['tee1']],
                     fleft, fright, gdirleft, gdirright)
-      if ((j+1L->j) >= nmax) {
-        eps     = (beta-a)/(2^12)
-        nhalf   = ceiling(log((beta-a)/(2*eps), 2))
-        nmax    = nhalf + n0
-        j       = 0L
-      }
+      if ((j+1L->j) >= nmax) eval(reset_j)
     } else if (penv[['gdir']] < c2 * gdir0) {
       gdirleft_p = gdirleft
       fleft_p    = fleft
@@ -366,12 +399,7 @@ weak_wolfe_search =  function(fn, gr, x0, dk, f0, g0, c1, c2, extra_arg, penv, t
                r = itppt(j, fleft, fright, gdirleft, gdirright, a, beta, nhalf, eps, n0, kap1, kap2)
                printf(trace, '%-7s %15.9f %15.9f %15.9f %15.9f %15.9f %15.9f %15.9f\n', "LEFT", a, beta, r,
                       fleft_p, fleft, gdirleft_p, gdirleft)
-               if ((j+1L->j) >= nmax) {
-                 eps     = (beta-a)/(2^12)
-                 nhalf   = ceiling(log((beta-a)/(2*eps), 2))
-                 nmax    = nhalf + n0
-                 j       = 0L
-               }
+               if ((j+1L->j) >= nmax) eval(reset_j)
                r
              } else {
                r = extrap(a_p, a, fleft_p, fleft, gdirleft_p, gdirleft, c2)
@@ -395,11 +423,7 @@ weak_wolfe_search =  function(fn, gr, x0, dk, f0, g0, c1, c2, extra_arg, penv, t
 
 extrap = function (a0, a, f0, fleft, gdir0, gdirleft, c2) {
   ## if (gdirleft > 0 || gdir0 > 0)     print(c(gdir0, gdirleft))
-  if (gdir0 < 0 && gdirleft > gdir0)
-    (a0*(gdirleft+c2*gdir0) - a*(gdir0+c2*gdir0)) / (gdirleft - gdir0)
-  else
-    ## If the gradient is steeper downward it is very difficult to get a reasonable
-    ## extrapolation. So just simply multiply by a constant and finger crossed.
-    3.*a
+  if (gdir0 < 0 && gdirleft > gdir0)   (a0*(gdirleft+c2*gdir0) - a*(gdir0+c2*gdir0)) / (gdirleft - gdir0)
+  else                                 3.*a
 }
 

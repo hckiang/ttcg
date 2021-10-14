@@ -4,7 +4,7 @@
 \alias{ttcg}
 \title{Accelerated three-term conjugate gradient optimization with restart}
 \usage{
-ttcg(par, fn, gr = NULL, method = "TTDES", control = list(), ...)
+ttcg(par, fn, gr = NULL, method = "TTCG", control = list(), ...)
 }
 \arguments{
 \item{par}{A numerical vector containing the initial parameters.}
@@ -17,7 +17,7 @@ and return a vector of the same length as \code{par}. If it is \code{NULL} then
 numerical finite difference is used to obtain the gradient.}
 
 \item{method}{A character string, one of 'TTDES', 'TTCG', 'THREECG'. This determines how the
-line search direction is computed. 'TTDES' is the default method.}
+line search direction is computed. 'TTCG' is the default method.}
 
 \item{control}{A list of control parameters. See Details.}
 
@@ -50,6 +50,13 @@ than a tolerance; (3) \eqn{|f_{k+1} - f_k| < \epsilon * (1 + |f_k|)}. These thre
 tolerances can be set in the \code{control} argument, and turnt off by setting them
 to any negative values. If all three were turnt off, the algorithm may never stop.
 
+For minimization problems, in which \code{fnscale} is positive, the objective function
+can return \code{NaN} or \code{Inf} but \code{NA} or \code{-Inf} will results in the algorithm being stopped
+immediately, because \code{-Inf} means the function is unbounded below and any arithmetic error, such as dividing
+by zero, should be coded as \code{NaN}; while \code{NA} should signify programming error. For maximization problems,
+\code{-Inf} instead of \code{Inf} is allowed. The gradient function, similarly, can contain \code{NaN}, \code{Inf},
+or \code{-Inf}, but returning \code{NA} will stop the algorithm.
+
 The \code{method} argument specifies how the search direction in each step is computed.
 Please see the three Neculai Andrei's three papers in the citation section for more
 detailed description. An acceleration scheme and a restart procedure are implemented
@@ -63,6 +70,8 @@ element:
 
     \describe{
       \item{maxit}{The maximal number of iteration. Default is 500.}
+      \item{fnscale}{Scalar to divide fn and gr during optimization. If negative, turns the problem into a maximization problem. Optimization is performed on \code{fn(par)/fnscale}.}
+      \item{parscale}{A vector of scaling values for the parameters. Optimization is performed on \code{par/parscale} and these should be comparable in the sense that a unit change in any element produces about a unit change in the scaled value.}
       \item{gl2tol}{A positive small number. The iteration will be terminated if the
                     squared Euclidean norm of the gradient is smaller than this number. Default is
                     \code{min(1e-9, length(par)*1e-10)}. To turn off this test,

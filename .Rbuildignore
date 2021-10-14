@@ -5,4 +5,5 @@
 .travis.yml
 .build.yml
 .Rd2pdf.*
+*.sca
 LICENSE
